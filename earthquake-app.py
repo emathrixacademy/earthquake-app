@@ -5,8 +5,9 @@ from datetime import datetime
 import pytz
 import numpy as np
 from PIL import Image
-import tensorflow as tf
 import io
+import base64
+import json
 
 # Mobile-first configuration
 st.set_page_config(
@@ -102,51 +103,66 @@ def check_recent_earthquakes():
         st.error(f"Error checking earthquakes: {e}")
         return None
 
-# Load Teachable Machine model
-@st.cache_resource
-def load_model(model_path):
+# Classify using Teachable Machine hosted model
+def classify_building_damage_hosted(image, model_url):
     """
-    Load TensorFlow Lite model from Teachable Machine
-    Export your Teachable Machine model as TensorFlow Lite
-    model_path: local path to .tflite file or URL
+    Classify building damage using hosted Teachable Machine model
+    model_url: Your Teachable Machine model URL
     """
     try:
-        interpreter = tf.lite.Interpreter(model_path=model_path)
-        interpreter.allocate_tensors()
-        return interpreter
-    except Exception as e:
-        st.error(f"Error loading model: {e}")
-        return None
-
-# Run inference on image
-def classify_building_damage(image, interpreter, input_shape=(224, 224)):
-    """Classify building damage from image"""
-    try:
-        # Prepare image
-        img_array = np.array(image).astype(np.float32)
-        img_resized = Image.fromarray(image).resize(input_shape)
-        img_array = np.array(img_resized) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
+        # Convert image to format for API
+        img_array = np.array(image)
         
-        # Get input and output tensors
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
+        # Convert to JPEG bytes
+        img_pil = Image.fromarray(img_array.astype('uint8'))
+        img_byte_arr = io.BytesIO()
+        img_pil.save(img_byte_arr, format='JPEG')
+        img_byte_arr.seek(0)
         
-        # Run inference
-        interpreter.set_tensor(input_details[0]['index'], img_array)
-        interpreter.invoke()
+        # Teachable Machine expects base64 encoded image
+        img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode()
         
-        # Get predictions
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        predictions = output_data[0]
+        # Prepare payload for Teachable Machine API
+        payload = {
+            "data": img_base64
+        }
         
-        class_names = ["SAFE", "DAMAGED", "UNSAFE"]
-        confidence = np.max(predictions)
-        class_idx = np.argmax(predictions)
-        predicted_class = class_names[class_idx]
+        # Use Teachable Machine's prediction API
+        api_url = model_url.replace("/models/", "/api/models/") + "/predict"
         
-        return predicted_class, float(confidence), predictions
-    
+        # Alternative: Use the model's JSON endpoint
+        # Format: https://teachablemachine.withgoogle.com/models/DAMz0Wpil/
+        # We'll use a direct approach with the hosted model
+        
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(
+            api_url,
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            predictions = response.json()
+            # Teachable Machine returns class predictions
+            class_names = ["SAFE", "DAMAGED", "UNSAFE"]
+            
+            # Get the prediction with highest score
+            max_confidence = 0
+            predicted_class = "SAFE"
+            
+            for i, class_name in enumerate(class_names):
+                if f"class_{i}" in predictions or class_name.lower() in predictions:
+                    confidence = predictions.get(f"class_{i}", predictions.get(class_name.lower(), 0))
+                    if confidence > max_confidence:
+                        max_confidence = confidence
+                        predicted_class = class_name
+            
+            return predicted_class, max_confidence, predictions
+        else:
+            st.error(f"API Error: {response.status_code}")
+            return None, 0, None
+            
     except Exception as e:
         st.error(f"Error during classification: {e}")
         return None, 0, None
@@ -179,15 +195,8 @@ if st.session_state.current_earthquake:
     st.divider()
     st.subheader("Step 1: Assess Building Damage")
     
-    # NOTE: Replace with your actual Teachable Machine model path
-    MODEL_PATH = "model.tflite"  # Download from Teachable Machine as TensorFlow Lite
-    
-    st.info("""
-    **How to get your model:**
-    1. Train on Teachable Machine with 3 categories: SAFE, DAMAGED, UNSAFE
-    2. Click Export → TensorFlow Lite → Download .tflite file
-    3. Upload to your repository or use a shareable link
-    """)
+    # Your Teachable Machine model URL
+    MODEL_URL = "https://teachablemachine.withgoogle.com/models/DAMz0Wpil/"
     
     # Image input
     col1, col2 = st.columns(2)
@@ -215,22 +224,21 @@ if st.session_state.current_earthquake:
         st.image(image_to_process, caption="Building Assessment Photo", use_container_width=True)
         
         if st.button("🔍 Analyze Building Damage", type="primary", use_container_width=True):
-            with st.spinner("Analyzing damage..."):
-                # Load model and classify
-                interpreter = load_model(MODEL_PATH)
+            with st.spinner("Analyzing damage with AI..."):
+                predicted_class, confidence, all_predictions = classify_building_damage_hosted(
+                    image_to_process,
+                    MODEL_URL
+                )
                 
-                if interpreter:
-                    predicted_class, confidence, all_predictions = classify_building_damage(
-                        image_to_process, 
-                        interpreter
-                    )
-                    
+                if predicted_class:
                     st.session_state.assessment_results = {
                         "class": predicted_class,
                         "confidence": confidence,
                         "predictions": all_predictions
                     }
                     st.rerun()
+                else:
+                    st.error("Failed to classify image. Please try again.")
     
     # Display assessment results
     if st.session_state.assessment_results:
@@ -305,4 +313,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("PH Earthquake Response System v1.0 | Data: USGS | AI: TensorFlow Lite + Teachable Machine")
+st.caption("PH Earthquake Response System v1.0 | Data: USGS | AI: Teachable Machine")
