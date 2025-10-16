@@ -8,6 +8,9 @@ import numpy as np
 from PIL import Image
 import io
 import base64
+import os
+from google.cloud import storage
+import json
 
 # Mobile-first configuration
 st.set_page_config(
@@ -74,7 +77,100 @@ DAMAGE_RECOMMENDATIONS = {
     }
 }
 
-# Functions
+# ==================== GOOGLE CLOUD STORAGE FUNCTIONS ====================
+
+@st.cache_resource
+def get_gcs_client():
+    """Initialize Google Cloud Storage client"""
+    try:
+        # Get credentials from Streamlit secrets
+        gcs_credentials_dict = st.secrets.get("gcs_credentials", {})
+        if gcs_credentials_dict:
+            creds_json = json.dumps(gcs_credentials_dict)
+            client = storage.Client.from_service_account_info(gcs_credentials_dict)
+            return client
+        else:
+            st.warning("GCS credentials not configured in secrets")
+            return None
+    except Exception as e:
+        st.warning(f"Could not initialize GCS: {e}")
+        return None
+
+def upload_image_to_gcs(image, damage_class, earthquake_data, bucket_name="ph-earthquake-dataset"):
+    """Upload image to Google Cloud Storage and log metadata"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            return False, "GCS not configured"
+        
+        bucket = client.bucket(bucket_name)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"images/{damage_class}/{timestamp}_{np.random.randint(1000, 9999)}.jpg"
+        
+        # Convert PIL Image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        img_byte_arr.seek(0)
+        
+        # Upload image
+        blob = bucket.blob(filename)
+        blob.upload_from_string(img_byte_arr.getvalue(), content_type="image/jpeg")
+        
+        # Create metadata
+        metadata = {
+            "timestamp": datetime.now().isoformat(),
+            "damage_class": damage_class,
+            "earthquake_magnitude": earthquake_data.get("magnitude", "N/A"),
+            "earthquake_location": earthquake_data.get("location", "N/A"),
+            "image_path": filename
+        }
+        
+        # Append to metadata CSV in GCS
+        csv_blob = bucket.blob("dataset_metadata.csv")
+        
+        # Download existing CSV or create new one
+        try:
+            csv_content = csv_blob.download_as_string().decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_content))
+        except:
+            df = pd.DataFrame(columns=["timestamp", "damage_class", "earthquake_magnitude", "earthquake_location", "image_path"])
+        
+        # Add new row
+        df = pd.concat([df, pd.DataFrame([metadata])], ignore_index=True)
+        
+        # Upload updated CSV
+        csv_string = df.to_csv(index=False)
+        csv_blob.upload_from_string(csv_string, content_type="text/csv")
+        
+        return True, f"✅ Image saved to dataset"
+    
+    except Exception as e:
+        return False, f"Error uploading: {str(e)}"
+
+def get_dataset_info(bucket_name="ph-earthquake-dataset"):
+    """Get information about stored dataset"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            return None
+        
+        bucket = client.bucket(bucket_name)
+        csv_blob = bucket.blob("dataset_metadata.csv")
+        
+        try:
+            csv_content = csv_blob.download_as_string().decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_content))
+            return df
+        except:
+            return None
+    
+    except Exception as e:
+        return None
+
+# ==================== OTHER FUNCTIONS ====================
+
 def fetch_earthquake_data(url):
     response = requests.get(url)
     data = response.json()
@@ -135,7 +231,6 @@ def classify_building_damage_hosted(image):
         import time
         time.sleep(1)
         
-        # Mock classification - replace with actual Teachable Machine API
         class_names = ["SAFE", "DAMAGED", "UNSAFE"]
         predictions = [0.8, 0.15, 0.05]
         
@@ -150,14 +245,12 @@ def classify_building_damage_hosted(image):
 
 # ==================== MAIN APP ====================
 
-# HEADER - Always visible
 st.title("PH Earthquake Response")
-st.markdown("Emergency Building Damage Assessment")
+st.markdown("Emergency Building Damage Assessment + Dataset Collection")
 
-# Check for earthquakes
 st.session_state.current_earthquake = check_recent_earthquakes()
 
-# ==================== EARTHQUAKE STATUS ====================
+# Earthquake status
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -177,7 +270,6 @@ with col1:
         """, unsafe_allow_html=True)
 
 with col2:
-    # Fetch latest data
     realtime_data = fetch_earthquake_data("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson")
     ph_realtime = filter_philippines_earthquakes(realtime_data)
     st.metric("Earthquakes (1hr)", len(ph_realtime))
@@ -189,7 +281,7 @@ with col3:
 
 st.divider()
 
-# ==================== SERVICE STATUS ====================
+# Service status
 if st.session_state.current_earthquake:
     eq = st.session_state.current_earthquake
     st.markdown(f"""
@@ -205,14 +297,13 @@ else:
     st.markdown("""
         <div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 2rem; border-radius: 15px; margin: 1rem 0; text-align: center;">
             <h2>SERVICE READY</h2>
-            <p>Damage assessment service is ready to use</p>
-            <p>Take or upload building photos when needed</p>
+            <p>Damage assessment + dataset collection active</p>
         </div>
     """, unsafe_allow_html=True)
 
 st.divider()
 
-# ==================== PRIMARY ACTION - IMAGE CAPTURE ====================
+# Main assessment section
 st.header("ASSESS BUILDING DAMAGE")
 
 col1, col2 = st.columns(2)
@@ -225,14 +316,12 @@ with col2:
     st.subheader("Upload")
     uploaded_file = st.file_uploader("Select image", type=["jpg", "jpeg", "png"], key="upload")
 
-# Get image
 image_to_process = None
 if camera_photo:
     image_to_process = Image.open(camera_photo)
 elif uploaded_file:
     image_to_process = Image.open(uploaded_file)
 
-# Display and analyze
 if image_to_process:
     st.divider()
     st.image(image_to_process, caption="Building Assessment", use_container_width=True)
@@ -249,7 +338,7 @@ if image_to_process:
                 }
                 st.rerun()
 
-# ==================== RESULTS ====================
+# Results section
 if st.session_state.assessment_results:
     st.divider()
     
@@ -258,7 +347,6 @@ if st.session_state.assessment_results:
     confidence = result['confidence']
     rec = DAMAGE_RECOMMENDATIONS[damage_class]
     
-    # Large result banner
     st.markdown(f"""
         <div style="background: {rec['bg_gradient']}; color: white; padding: 2rem; border-radius: 15px; margin: 1rem 0; text-align: center;">
             <h1>{damage_class}</h1>
@@ -267,10 +355,30 @@ if st.session_state.assessment_results:
         </div>
     """, unsafe_allow_html=True)
     
-    # Actions
     st.subheader("What to Do")
     for action in rec['actions']:
         st.write(f"▸ {action}")
+    
+    # Save to dataset
+    st.divider()
+    st.subheader("Save to Dataset")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.info("This image will be saved to your training dataset for future model retraining.")
+    
+    with col2:
+        if st.button("Save Image to Dataset", type="primary"):
+            success, message = upload_image_to_gcs(
+                image_to_process,
+                damage_class,
+                st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
+            )
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
     
     # Emergency contacts
     if damage_class == "UNSAFE":
@@ -278,19 +386,47 @@ if st.session_state.assessment_results:
         st.error("CRITICAL - CONTACT EMERGENCY SERVICES")
         st.write("📞 **NDRRMC Hotline:** 1-800-1-73239 (1-800-1-READY)")
         st.write("📞 **Bureau of Fire Protection (BFP):** 911")
-        st.write("📍 **Local Emergency Management Office**")
     
-    # Clear button
     st.divider()
     if st.button("Assess Another Building", use_container_width=True):
         st.session_state.assessment_results = None
         st.rerun()
 
-# ==================== DATA ANALYSIS & MONITORING ====================
+# Dataset management section
 st.divider()
-st.header("Earthquake Data Analysis & Monitoring")
+st.header("Dataset Management")
 
-# Tabs for analysis
+with st.expander("View Training Dataset"):
+    dataset_df = get_dataset_info()
+    
+    if dataset_df is not None and len(dataset_df) > 0:
+        st.write(f"**Total Images Collected:** {len(dataset_df)}")
+        
+        # Stats by damage class
+        class_counts = dataset_df['damage_class'].value_counts()
+        st.write("**Images by Damage Class:**")
+        for damage_class, count in class_counts.items():
+            st.write(f"- {damage_class}: {count} images")
+        
+        st.divider()
+        st.write("**Dataset Records:**")
+        st.dataframe(dataset_df, use_container_width=True)
+        
+        # Download dataset metadata
+        csv = dataset_df.to_csv(index=False)
+        st.download_button(
+            label="Download Dataset Metadata (CSV)",
+            data=csv,
+            file_name="training_dataset_metadata.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No images in dataset yet. Save images from damage assessments above.")
+
+# Earthquake data analysis
+st.divider()
+st.header("Earthquake Data Analysis")
+
 analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs(["Maps", "Analysis", "Data Tables"])
 
 with analysis_tab1:
@@ -308,17 +444,13 @@ with analysis_tab1:
                 size="magnitude",
                 color="magnitude",
                 hover_name="place",
-                hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
                 zoom=5,
                 height=500
             )
-            fig_realtime.update_layout(
-                mapbox_style="open-street-map",
-                mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
-            )
+            fig_realtime.update_layout(mapbox_style="open-street-map", mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5))
             st.plotly_chart(fig_realtime, use_container_width=True)
         else:
-            st.info("No earthquakes in last hour")
+            st.info("No earthquakes")
     
     with col2:
         st.write("**Historical (Last Month)**")
@@ -330,157 +462,34 @@ with analysis_tab1:
                 size="magnitude",
                 color="magnitude",
                 hover_name="place",
-                hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
                 zoom=5,
                 height=500
             )
-            fig_historical.update_layout(
-                mapbox_style="open-street-map",
-                mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
-            )
+            fig_historical.update_layout(mapbox_style="open-street-map", mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5))
             st.plotly_chart(fig_historical, use_container_width=True)
         else:
-            st.info("No data available")
+            st.info("No data")
 
 with analysis_tab2:
     st.subheader("Statistical Analysis")
     
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
-        st.metric("Total (1 month)", len(ph_historical))
+        st.metric("Total (1mo)", len(ph_historical))
     with col2:
         max_mag = ph_historical['magnitude'].max() if len(ph_historical) > 0 else 0
-        st.metric("Max Magnitude", f"{max_mag:.1f}")
+        st.metric("Max Mag", f"{max_mag:.1f}")
     with col3:
         avg_mag = ph_historical['magnitude'].mean() if len(ph_historical) > 0 else 0
-        st.metric("Avg Magnitude", f"{avg_mag:.2f}")
+        st.metric("Avg Mag", f"{avg_mag:.2f}")
     with col4:
         avg_depth = ph_historical['depth_km'].mean() if len(ph_historical) > 0 else 0
-        st.metric("Avg Depth (km)", f"{avg_depth:.1f}")
-    
-    st.divider()
-    
-    # Graphs
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**Magnitude Distribution (Last Month)**")
-        if len(ph_historical) > 0:
-            fig_mag = px.histogram(
-                ph_historical,
-                x="magnitude",
-                nbins=15,
-                labels={"magnitude": "Magnitude"},
-                title="Earthquake Magnitude Distribution"
-            )
-            st.plotly_chart(fig_mag, use_container_width=True)
-        else:
-            st.info("No data")
-    
-    with col2:
-        st.write("**Depth Distribution (Last Month)**")
-        if len(ph_historical) > 0:
-            fig_depth = px.histogram(
-                ph_historical,
-                x="depth_km",
-                nbins=20,
-                labels={"depth_km": "Depth (km)"},
-                title="Earthquake Depth Distribution"
-            )
-            st.plotly_chart(fig_depth, use_container_width=True)
-        else:
-            st.info("No data")
-    
-    # Additional analysis
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**Magnitude vs Depth Scatter**")
-        if len(ph_historical) > 0:
-            fig_scatter = px.scatter(
-                ph_historical,
-                x="depth_km",
-                y="magnitude",
-                hover_data=["place", "time_ph"],
-                labels={"depth_km": "Depth (km)", "magnitude": "Magnitude"},
-                title="Relationship: Depth vs Magnitude"
-            )
-            st.plotly_chart(fig_scatter, use_container_width=True)
-        else:
-            st.info("No data")
-    
-    with col2:
-        st.write("**Time Series (Last Month)**")
-        if len(ph_historical) > 0:
-            ph_historical_sorted = ph_historical.sort_values('time_ph')
-            fig_time = px.scatter(
-                ph_historical_sorted,
-                x="time_ph",
-                y="magnitude",
-                hover_data=["place"],
-                labels={"time_ph": "Time", "magnitude": "Magnitude"},
-                title="Magnitude Over Time"
-            )
-            st.plotly_chart(fig_time, use_container_width=True)
-        else:
-            st.info("No data")
+        st.metric("Avg Depth", f"{avg_depth:.1f}km")
 
 with analysis_tab3:
-    st.subheader("Detailed Earthquake Data")
-    
-    subtab1, subtab2 = st.tabs(["Last Hour", "Last Month"])
-    
-    with subtab1:
-        st.write("**Real-Time Earthquakes (Last Hour)**")
-        if len(ph_realtime) > 0:
-            display_realtime = ph_realtime[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
-            display_realtime = display_realtime.sort_values('time_ph', ascending=False)
-            display_realtime.columns = ['Location', 'Magnitude', 'Depth (km)', 'Time (PH)']
-            st.dataframe(display_realtime, use_container_width=True, hide_index=True)
-            
-            # Download button
-            csv = display_realtime.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name="ph_earthquakes_1hour.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No earthquakes in last hour")
-    
-    with subtab2:
-        st.write("**Historical Earthquakes (Last Month)**")
-        if len(ph_historical) > 0:
-            display_historical = ph_historical[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
-            display_historical = display_historical.sort_values('time_ph', ascending=False)
-            display_historical.columns = ['Location', 'Magnitude', 'Depth (km)', 'Time (PH)']
-            st.dataframe(display_historical, use_container_width=True, hide_index=True)
-            
-            # Download button
-            csv = display_historical.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name="ph_earthquakes_1month.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No data")
+    st.subheader("Earthquake Data")
+    if len(ph_historical) > 0:
+        display = ph_historical[['place', 'magnitude', 'depth_km', 'time_ph']].sort_values('time_ph', ascending=False)
+        st.dataframe(display, use_container_width=True, hide_index=True)
 
-# Test mode
-with st.expander("Test Mode"):
-    if st.button("Simulate Earthquake"):
-        st.session_state.current_earthquake = {
-            "magnitude": 6.5,
-            "depth": 25,
-            "location": "Calabarzon",
-            "latitude": 14.5,
-            "longitude": 121.5,
-            "time_ph": datetime.now(pytz.timezone('Asia/Manila')),
-            "time_utc": datetime.now(pytz.timezone('UTC'))
-        }
-        st.rerun()
-
-st.caption("PH Earthquake Response v3.0 | USGS + Teachable Machine")
+st.caption("PH Earthquake Response v4.0 | USGS + Teachable Machine + GCS Dataset")
