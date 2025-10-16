@@ -1,109 +1,20 @@
-# import streamlit as st
-# import pandas as pd
-# import plotly.express as px
-# import requests
-# from datetime import datetime
-# import pytz
-
-# # Function to fetch earthquake data
-# def fetch_earthquake_data(url):
-#     response = requests.get(url)
-#     data = response.json()
-    
-#     # Parse the data
-#     features = data['features']
-#     earthquakes = []
-#     for feature in features:
-#         properties = feature['properties']
-#         geometry = feature['geometry']
-#         utc_time = pd.to_datetime(properties['time'], unit='ms')
-#         local_time = utc_time.tz_localize('UTC').tz_convert(pytz.timezone('America/Los_Angeles'))  # Convert to local timezone
-#         earthquakes.append({
-#             "place": properties['place'],
-#             "magnitude": properties['mag'],
-#             "time_utc": utc_time,
-#             "time_local": local_time,
-#             "latitude": geometry['coordinates'][1],
-#             "longitude": geometry['coordinates'][0]
-#         })
-    
-#     return pd.DataFrame(earthquakes)
-
-# # Fetch real-time earthquake data
-# realtime_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
-# realtime_earthquake_data = fetch_earthquake_data(realtime_url)
-
-# # Fetch historical earthquake data
-# historical_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson"
-# historical_earthquake_data = fetch_earthquake_data(historical_url)
-
-# # Streamlit app layout
-# st.title("Real-Time Earthquake Monitoring Webapp")
-# st.markdown("This app visualizes real-time and historical earthquake data from the US Geological Survey (USGS).")
-
-# # Filter by magnitude
-# min_magnitude = st.slider("Minimum Magnitude", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
-# filtered_realtime_data = realtime_earthquake_data[realtime_earthquake_data["magnitude"] >= min_magnitude]
-# filtered_historical_data = historical_earthquake_data[historical_earthquake_data["magnitude"] >= min_magnitude]
-
-# # Create a Plotly map for real-time earthquakes
-# fig_realtime = px.scatter_mapbox(
-#     filtered_realtime_data,
-#     lat="latitude",
-#     lon="longitude",
-#     size="magnitude",
-#     color="magnitude",
-#     hover_name="place",
-#     hover_data={"time_utc": True, "time_local": True, "magnitude": True},
-#     zoom=1,
-#     height=600,
-#     title="Recent Earthquakes (Last Hour)"
-# )
-
-# # Create a Plotly map for historical earthquakes
-# fig_historical = px.scatter_mapbox(
-#     filtered_historical_data,
-#     lat="latitude",
-#     lon="longitude",
-#     size="magnitude",
-#     color="magnitude",
-#     hover_name="place",
-#     hover_data={"time_utc": True, "time_local": True, "magnitude": True},
-#     zoom=1,
-#     height=600,
-#     title="Historical Earthquakes (Last Month)"
-# )
-
-# fig_realtime.update_layout(mapbox_style="open-street-map")
-# fig_historical.update_layout(mapbox_style="open-street-map")
-
-# # Display the maps
-# st.plotly_chart(fig_realtime)
-# st.plotly_chart(fig_historical)
-
-# # Display the filtered raw data
-# st.subheader("Filtered Real-Time Earthquake Data")
-# st.write(filtered_realtime_data)
-
-# st.subheader("Filtered Historical Earthquake Data")
-# st.write(filtered_historical_data)
-
-# # Additional Information
-# st.sidebar.subheader("About This App")
-# st.sidebar.info(
-#     """
-#     This application fetches real-time and historical earthquake data from the USGS API and visualizes it on interactive maps.
-#     Use the slider to filter earthquakes by magnitude. The times are displayed in both UTC and local time.
-#     """
-# )
-
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
 from datetime import datetime
 import pytz
+import os
+
+st.set_page_config(page_title="PH Earthquake Response System", layout="wide")
+
+# Initialize session state
+if "selected_city" not in st.session_state:
+    st.session_state.selected_city = None
+if "uploaded_images" not in st.session_state:
+    st.session_state.uploaded_images = []
+if "assessment_data" not in st.session_state:
+    st.session_state.assessment_data = {}
 
 # Function to fetch earthquake data
 def fetch_earthquake_data(url):
@@ -129,50 +40,79 @@ def fetch_earthquake_data(url):
     
     return pd.DataFrame(earthquakes)
 
-# Filter earthquakes to Philippines region
+# Filter to Philippines
 def filter_philippines_earthquakes(df):
-    # Philippines bounding box: lat 5-20°N, lon 120-130°E
     ph_filtered = df[
         (df['latitude'] >= 4) & (df['latitude'] <= 20) &
         (df['longitude'] >= 119) & (df['longitude'] <= 131)
     ]
     return ph_filtered
 
-# Fetch data
+# Philippine municipalities and their approximate coordinates
+ph_municipalities = {
+    "Calabarzon Region": {
+        "Quezon City": {"lat": 14.6349, "lon": 121.0388},
+        "Makati": {"lat": 14.5547, "lon": 121.0244},
+        "Tagaytay": {"lat": 14.1345, "lon": 121.0075},
+        "Cavite City": {"lat": 14.3742, "lon": 120.8958},
+        "Lucena": {"lat": 14.1950, "lon": 121.6206},
+        "Pasay": {"lat": 14.5480, "lon": 121.0080},
+    },
+    "National Capital Region": {
+        "Manila": {"lat": 14.5994, "lon": 120.9842},
+        "Taguig": {"lat": 14.5794, "lon": 121.0566},
+        "Valenzuela": {"lat": 14.6899, "lon": 120.9819},
+        "Navotas": {"lat": 14.6588, "lon": 120.9255},
+    },
+    "Visayas": {
+        "Cebu City": {"lat": 10.3157, "lon": 123.8854},
+        "Iloilo City": {"lat": 10.6898, "lon": 122.5547},
+        "Bacolod": {"lat": 10.3932, "lon": 123.0136},
+    },
+    "Mindanao": {
+        "Davao City": {"lat": 7.0731, "lon": 125.6121},
+        "Cagayan de Oro": {"lat": 8.4874, "lon": 124.6426},
+    }
+}
+
+# Main title
+st.title("🚨 Philippines Earthquake Response System")
+st.markdown("Real-time monitoring + Damage Assessment")
+
+# Fetch earthquake data
 realtime_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
 historical_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson"
 
 realtime_data = fetch_earthquake_data(realtime_url)
 historical_data = fetch_earthquake_data(historical_url)
 
-# Filter to Philippines only
 ph_realtime = filter_philippines_earthquakes(realtime_data)
 ph_historical = filter_philippines_earthquakes(historical_data)
 
-# Streamlit layout
-st.set_page_config(page_title="PH Earthquake Monitor", layout="wide")
-st.title("🇵🇭 Philippines Earthquake Monitoring System")
-st.markdown("Real-time earthquake data focused on the Philippine region (Updated from USGS)")
+# ==================== SECTION 1: EARTHQUAKE MONITORING ====================
+st.divider()
+st.header("1️⃣ Real-Time Earthquake Monitoring")
 
 # Key metrics
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Earthquakes (Last Hour)", len(ph_realtime))
+    st.metric("Earthquakes (1hr)", len(ph_realtime))
 with col2:
-    st.metric("Earthquakes (Last Month)", len(ph_historical))
+    st.metric("Earthquakes (1mo)", len(ph_historical))
 with col3:
     max_mag_realtime = ph_realtime['magnitude'].max() if len(ph_realtime) > 0 else 0
-    st.metric("Max Magnitude (1hr)", f"{max_mag_realtime:.1f}")
+    st.metric("Max Mag (1hr)", f"{max_mag_realtime:.1f}")
 with col4:
     max_mag_monthly = ph_historical['magnitude'].max() if len(ph_historical) > 0 else 0
-    st.metric("Max Magnitude (1mo)", f"{max_mag_monthly:.1f}")
+    st.metric("Max Mag (1mo)", f"{max_mag_monthly:.1f}")
 
 # Filter controls
-st.sidebar.header("Filter Options")
-min_magnitude = st.sidebar.slider("Minimum Magnitude", 0.0, 10.0, 2.0, 0.1)
-depth_range = st.sidebar.slider("Depth Range (km)", 0, 700, (0, 700))
+col1, col2 = st.columns(2)
+with col1:
+    min_magnitude = st.slider("Minimum Magnitude", 0.0, 10.0, 2.0, 0.1)
+with col2:
+    depth_range = st.slider("Depth Range (km)", 0, 700, (0, 700))
 
-# Apply filters
 ph_realtime_filtered = ph_realtime[
     (ph_realtime['magnitude'] >= min_magnitude) &
     (ph_realtime['depth_km'] >= depth_range[0]) &
@@ -185,7 +125,7 @@ ph_historical_filtered = ph_historical[
     (ph_historical['depth_km'] <= depth_range[1])
 ]
 
-# Create maps
+# Map display
 col1, col2 = st.columns(2)
 
 with col1:
@@ -197,23 +137,13 @@ with col1:
         size="magnitude",
         color="magnitude",
         hover_name="place",
-        hover_data={
-            "magnitude": ":.2f",
-            "depth_km": ":.1f",
-            "time_ph": True,
-            "latitude": False,
-            "longitude": False
-        },
+        hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
         zoom=5,
-        height=500,
-        title="Recent Earthquakes"
+        height=500
     )
     fig_realtime.update_layout(
         mapbox_style="open-street-map",
-        mapbox=dict(
-            center=dict(lat=12.5, lon=125),
-            zoom=5
-        )
+        mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
     )
     st.plotly_chart(fig_realtime, use_container_width=True)
 
@@ -226,86 +156,148 @@ with col2:
         size="magnitude",
         color="magnitude",
         hover_name="place",
-        hover_data={
-            "magnitude": ":.2f",
-            "depth_km": ":.1f",
-            "time_ph": True,
-            "latitude": False,
-            "longitude": False
-        },
+        hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
         zoom=5,
-        height=500,
-        title="Monthly Earthquakes"
+        height=500
     )
     fig_historical.update_layout(
         mapbox_style="open-street-map",
-        mapbox=dict(
-            center=dict(lat=12.5, lon=125),
-            zoom=5
-        )
+        mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
     )
     st.plotly_chart(fig_historical, use_container_width=True)
 
-# Statistics and analysis
+# ==================== SECTION 2: DAMAGE ASSESSMENT ====================
 st.divider()
-st.subheader("📊 Data Analysis")
+st.header("2️⃣ Post-Earthquake Damage Assessment")
 
-col1, col2 = st.columns(2)
+# City/Municipality Selection
+st.subheader("Select Affected Area")
 
-with col1:
-    st.write("**Hourly Earthquakes by Magnitude**")
-    if len(ph_realtime_filtered) > 0:
-        mag_dist = ph_realtime_filtered.groupby(pd.cut(ph_realtime_filtered['magnitude'], bins=5)).size()
-        st.bar_chart(mag_dist)
-    else:
-        st.info("No earthquakes detected in the last hour")
+region = st.selectbox("Region", list(ph_municipalities.keys()))
+city = st.selectbox("City/Municipality", list(ph_municipalities[region].keys()))
 
-with col2:
-    st.write("**Monthly Earthquakes by Depth**")
-    if len(ph_historical_filtered) > 0:
-        depth_fig = px.histogram(
-            ph_historical_filtered,
-            x="depth_km",
-            nbins=20,
-            labels={"depth_km": "Depth (km)"}
+if city:
+    st.session_state.selected_city = city
+    city_coords = ph_municipalities[region][city]
+    
+    st.success(f"✅ Selected: **{city}**")
+    st.write(f"Coordinates: {city_coords['lat']:.4f}°N, {city_coords['lon']:.4f}°E")
+
+st.divider()
+
+# ==================== SECTION 3: IMAGE CAPTURE & UPLOAD ====================
+st.subheader("3️⃣ Capture Building/Road Integrity Data")
+
+if st.session_state.selected_city:
+    st.info(f"📍 Capturing damage assessment data for: **{st.session_state.selected_city}**")
+    
+    # Three tabs for different input methods
+    tab1, tab2, tab3 = st.tabs(["📸 Camera", "📁 Upload Files", "📋 Review Uploads"])
+    
+    with tab1:
+        st.write("Take a photo directly from your device camera")
+        camera_photo = st.camera_input("Take a photo of building/road damage")
+        
+        if camera_photo is not None:
+            st.image(camera_photo, caption="Captured Image", use_container_width=True)
+            
+            if st.button("Add to Assessment (Camera)"):
+                from datetime import datetime as dt
+                timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                image_entry = {
+                    "timestamp": timestamp,
+                    "city": st.session_state.selected_city,
+                    "source": "camera",
+                    "image_data": camera_photo.getvalue()
+                }
+                
+                st.session_state.uploaded_images.append(image_entry)
+                st.success(f"✅ Image added to {st.session_state.selected_city} assessment")
+                st.rerun()
+    
+    with tab2:
+        st.write("Upload photos from your device")
+        uploaded_files = st.file_uploader(
+            "Choose images of building/road damage",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="file_uploader"
         )
-        st.plotly_chart(depth_fig, use_container_width=True)
-    else:
-        st.info("No earthquakes in selected range")
+        
+        if uploaded_files:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                for uploaded_file in uploaded_files:
+                    st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+            
+            with col2:
+                if st.button("Add All to Assessment"):
+                    from datetime import datetime as dt
+                    timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    for uploaded_file in uploaded_files:
+                        image_entry = {
+                            "timestamp": timestamp,
+                            "city": st.session_state.selected_city,
+                            "source": "upload",
+                            "filename": uploaded_file.name,
+                            "image_data": uploaded_file.getvalue()
+                        }
+                        st.session_state.uploaded_images.append(image_entry)
+                    
+                    st.success(f"✅ {len(uploaded_files)} images added to assessment")
+                    st.rerun()
+    
+    with tab3:
+        st.write("Review all captured/uploaded images")
+        
+        if len(st.session_state.uploaded_images) > 0:
+            st.metric("Total Images Uploaded", len(st.session_state.uploaded_images))
+            
+            # Filter by city
+            city_filter = st.selectbox(
+                "Filter by city",
+                ["All"] + list(set([img["city"] for img in st.session_state.uploaded_images]))
+            )
+            
+            filtered_images = st.session_state.uploaded_images
+            if city_filter != "All":
+                filtered_images = [img for img in filtered_images if img["city"] == city_filter]
+            
+            # Display images in a grid
+            for idx, img_entry in enumerate(filtered_images):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.write(f"**{img_entry['city']}** | {img_entry['timestamp']}")
+                    st.image(img_entry["image_data"], use_container_width=True)
+                
+                with col2:
+                    if st.button(f"Remove", key=f"remove_{idx}"):
+                        st.session_state.uploaded_images.pop(idx)
+                        st.rerun()
+            
+            # Clear all button
+            st.divider()
+            if st.button("Clear All Images"):
+                st.session_state.uploaded_images = []
+                st.rerun()
+        
+        else:
+            st.info("No images uploaded yet. Use Camera or Upload tabs to add images.")
 
-# Data tables
+else:
+    st.warning("Please select a city/municipality first to begin damage assessment")
+
+# ==================== SECTION 4: NEXT STEPS ====================
 st.divider()
-st.subheader("📋 Detailed Data")
+st.subheader("4️⃣ Next Steps")
 
-tab1, tab2 = st.tabs(["Last Hour", "Last Month"])
-
-with tab1:
-    if len(ph_realtime_filtered) > 0:
-        display_realtime = ph_realtime_filtered[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
-        display_realtime = display_realtime.sort_values('time_ph', ascending=False)
-        st.dataframe(display_realtime, use_container_width=True)
-    else:
-        st.info("No earthquakes in the last hour")
-
-with tab2:
-    if len(ph_historical_filtered) > 0:
-        display_historical = ph_historical_filtered[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
-        display_historical = display_historical.sort_values('time_ph', ascending=False)
-        st.dataframe(display_historical, use_container_width=True)
-    else:
-        st.info("No earthquakes in selected range")
-
-# Footer
-st.sidebar.divider()
-st.sidebar.info(
-    """
-    **About This App**
-    
-    Monitors earthquakes in the Philippines using USGS data.
-    - Times shown in Philippine Time (PHT)
-    - Data updates every 5 minutes
-    - Bounding box: 4-20°N, 119-131°E
-    
-    **Data Source:** USGS Earthquake Hazards Program
-    """
-)
+st.info("""
+**Phase 2 (Coming Soon):** Machine Learning Classification
+- Your uploaded building photos will be analyzed by Teachable Machine
+- Damage levels: Safe | Damaged | Unsafe
+- Automated damage reports for emergency response
+""")
