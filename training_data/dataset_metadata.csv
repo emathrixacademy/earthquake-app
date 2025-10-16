@@ -1,2 +1,3 @@
 timestamp,damage_class,earthquake_magnitude,earthquake_location,filename,image_path
-2025-10-16T21:13:32.426968,UNSAFE,N/A,Manual Test,20251016_211331_8234.jpg,training_data/UNSAFE/20251016_211331_8234.jpg
+2025-10-16T21:13:32.426968,UNSAFE,,Manual Test,20251016_211331_8234.jpg,training_data/UNSAFE/20251016_211331_8234.jpg
+2025-10-16T21:14:36.819901,UNSAFE,N/A,Manual Test,20251016_211435_6490.jpg,training_data/UNSAFE/20251016_211435_6490.jpg
