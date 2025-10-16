@@ -164,6 +164,31 @@ def save_image_to_github(image, damage_class, earthquake_data):
     except Exception as e:
         return False, f"Error: {str(e)}"
 
+def get_dataset_info():
+    """Get dataset info from GitHub"""
+    try:
+        token = st.secrets.get("github_token")
+        repo_name = st.secrets.get("github_repo")
+        
+        if not token or not repo_name:
+            return None
+        
+        g = Github(token)
+        repo = g.get_user().get_repo(repo_name.split("/")[1])
+        
+        metadata_file = "training_data/dataset_metadata.csv"
+        
+        try:
+            file_contents = repo.get_contents(metadata_file)
+            csv_content = file_contents.decoded_content.decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_content))
+            return df
+        except:
+            return None
+    
+    except Exception as e:
+        return None
+
 # ==================== OTHER FUNCTIONS ====================
 
 def fetch_earthquake_data(url):
