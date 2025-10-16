@@ -9,8 +9,6 @@ from PIL import Image
 import io
 import base64
 import os
-from google.cloud import storage
-import json
 
 # Mobile-first configuration
 st.set_page_config(
@@ -77,93 +75,62 @@ DAMAGE_RECOMMENDATIONS = {
     }
 }
 
-# ==================== GOOGLE CLOUD STORAGE FUNCTIONS ====================
+# ==================== LOCAL DATASET FUNCTIONS ====================
 
-@st.cache_resource
-def get_gcs_client():
-    """Initialize Google Cloud Storage client"""
+def save_image_locally(image, damage_class, earthquake_data):
+    """Save image locally to training_data folder"""
     try:
-        # Get credentials from Streamlit secrets
-        gcs_credentials_dict = st.secrets.get("gcs_credentials", {})
-        if gcs_credentials_dict:
-            creds_json = json.dumps(gcs_credentials_dict)
-            client = storage.Client.from_service_account_info(gcs_credentials_dict)
-            return client
-        else:
-            st.warning("GCS credentials not configured in secrets")
-            return None
-    except Exception as e:
-        st.warning(f"Could not initialize GCS: {e}")
-        return None
-
-def upload_image_to_gcs(image, damage_class, earthquake_data, bucket_name="ph-earthquake-dataset"):
-    """Upload image to Google Cloud Storage and log metadata"""
-    try:
-        client = get_gcs_client()
-        if not client:
-            return False, "GCS not configured"
+        # Create training data directory structure
+        base_dir = "training_data"
+        class_dir = os.path.join(base_dir, damage_class)
         
-        bucket = client.bucket(bucket_name)
+        # Ensure directories exist
+        os.makedirs(class_dir, exist_ok=True)
         
         # Create filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"images/{damage_class}/{timestamp}_{np.random.randint(1000, 9999)}.jpg"
+        filename = f"{timestamp}_{np.random.randint(1000, 9999)}.jpg"
+        filepath = os.path.join(class_dir, filename)
         
-        # Convert PIL Image to bytes
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
-        img_byte_arr.seek(0)
+        # Save image
+        image.save(filepath)
         
-        # Upload image
-        blob = bucket.blob(filename)
-        blob.upload_from_string(img_byte_arr.getvalue(), content_type="image/jpeg")
+        # Create/update metadata CSV
+        metadata_file = os.path.join(base_dir, "dataset_metadata.csv")
         
-        # Create metadata
-        metadata = {
+        new_record = {
             "timestamp": datetime.now().isoformat(),
             "damage_class": damage_class,
-            "earthquake_magnitude": earthquake_data.get("magnitude", "N/A"),
-            "earthquake_location": earthquake_data.get("location", "N/A"),
-            "image_path": filename
+            "earthquake_magnitude": earthquake_data.get("magnitude", "N/A") if earthquake_data else "N/A",
+            "earthquake_location": earthquake_data.get("location", "N/A") if earthquake_data else "N/A",
+            "filename": filename,
+            "image_path": filepath
         }
         
-        # Append to metadata CSV in GCS
-        csv_blob = bucket.blob("dataset_metadata.csv")
+        # Load existing CSV or create new
+        if os.path.exists(metadata_file):
+            df = pd.read_csv(metadata_file)
+            df = pd.concat([df, pd.DataFrame([new_record])], ignore_index=True)
+        else:
+            df = pd.DataFrame([new_record])
         
-        # Download existing CSV or create new one
-        try:
-            csv_content = csv_blob.download_as_string().decode('utf-8')
-            df = pd.read_csv(io.StringIO(csv_content))
-        except:
-            df = pd.DataFrame(columns=["timestamp", "damage_class", "earthquake_magnitude", "earthquake_location", "image_path"])
+        # Save updated CSV
+        df.to_csv(metadata_file, index=False)
         
-        # Add new row
-        df = pd.concat([df, pd.DataFrame([metadata])], ignore_index=True)
-        
-        # Upload updated CSV
-        csv_string = df.to_csv(index=False)
-        csv_blob.upload_from_string(csv_string, content_type="text/csv")
-        
-        return True, f"✅ Image saved to dataset"
+        return True, f"✅ Image saved to training_data/{damage_class}/"
     
     except Exception as e:
-        return False, f"Error uploading: {str(e)}"
+        return False, f"Error saving: {str(e)}"
 
-def get_dataset_info(bucket_name="ph-earthquake-dataset"):
-    """Get information about stored dataset"""
+def get_dataset_info():
+    """Get information about locally stored dataset"""
     try:
-        client = get_gcs_client()
-        if not client:
-            return None
+        metadata_file = "training_data/dataset_metadata.csv"
         
-        bucket = client.bucket(bucket_name)
-        csv_blob = bucket.blob("dataset_metadata.csv")
-        
-        try:
-            csv_content = csv_blob.download_as_string().decode('utf-8')
-            df = pd.read_csv(io.StringIO(csv_content))
+        if os.path.exists(metadata_file):
+            df = pd.read_csv(metadata_file)
             return df
-        except:
+        else:
             return None
     
     except Exception as e:
@@ -370,13 +337,14 @@ if st.session_state.assessment_results:
     
     with col2:
         if st.button("Save Image to Dataset", type="primary"):
-            success, message = upload_image_to_gcs(
+            success, message = save_image_locally(
                 image_to_process,
                 damage_class,
                 st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
             )
             if success:
                 st.success(message)
+                st.info("📝 Commit changes to GitHub to save permanently")
             else:
                 st.error(message)
     
