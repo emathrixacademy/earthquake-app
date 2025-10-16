@@ -326,27 +326,35 @@ if st.session_state.assessment_results:
     for action in rec['actions']:
         st.write(f"▸ {action}")
     
-    # Save to dataset
+    # Save to dataset with correction option
     st.divider()
     st.subheader("Save to Dataset")
     
-    col1, col2 = st.columns([2, 1])
+    st.write("**Verify the assessment before saving:**")
     
-    with col1:
-        st.info("This image will be saved to your training dataset for future model retraining.")
+    # Allow user to correct the prediction
+    corrected_class = st.radio(
+        "Is this assessment correct?",
+        options=["SAFE", "DAMAGED", "UNSAFE"],
+        index=["SAFE", "DAMAGED", "UNSAFE"].index(damage_class),
+        horizontal=True
+    )
     
-    with col2:
-        if st.button("Save Image to Dataset", type="primary"):
-            success, message = save_image_locally(
-                image_to_process,
-                damage_class,
-                st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
-            )
-            if success:
-                st.success(message)
-                st.info("📝 Commit changes to GitHub to save permanently")
-            else:
-                st.error(message)
+    # Show if user corrected it
+    if corrected_class != damage_class:
+        st.warning(f"⚠️ Correcting prediction from {damage_class} → {corrected_class}")
+    
+    if st.button("Save Image to Dataset", type="primary", use_container_width=True):
+        success, message = save_image_locally(
+            image_to_process,
+            corrected_class,  # Save corrected label, not model prediction
+            st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
+        )
+        if success:
+            st.success(message)
+            st.info("📝 This image will improve your model. Commit to GitHub when ready.")
+        else:
+            st.error(message)
     
     # Emergency contacts
     if damage_class == "UNSAFE":
