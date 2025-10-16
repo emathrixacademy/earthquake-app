@@ -1,3 +1,13 @@
+PyGithub
+```
+
+Your full requirements.txt should look like:
+```
 streamlit
+pandas
 plotly
+requests
+pillow
+numpy
 pytz
+PyGithub
