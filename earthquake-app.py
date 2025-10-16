@@ -9,6 +9,7 @@ from PIL import Image
 import io
 import base64
 import os
+from github import Github
 
 # Mobile-first configuration
 st.set_page_config(
@@ -75,28 +76,49 @@ DAMAGE_RECOMMENDATIONS = {
     }
 }
 
-# ==================== LOCAL DATASET FUNCTIONS ====================
+# ==================== LOCAL + GITHUB DATASET FUNCTIONS ====================
 
-def save_image_locally(image, damage_class, earthquake_data):
-    """Save image locally to training_data folder"""
+def save_image_to_github(image, damage_class, earthquake_data):
+    """Save image to GitHub automatically"""
     try:
-        # Create training data directory structure
-        base_dir = "training_data"
-        class_dir = os.path.join(base_dir, damage_class)
+        # Get GitHub credentials
+        token = st.secrets.get("github_token")
+        repo_name = st.secrets.get("github_repo")
         
-        # Ensure directories exist
-        os.makedirs(class_dir, exist_ok=True)
+        if not token or not repo_name:
+            return False, "GitHub credentials not configured in secrets"
         
-        # Create filename with timestamp
+        # Connect to GitHub
+        g = Github(token)
+        repo = g.get_user().get_repo(repo_name.split("/")[1])
+        
+        # Create filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{np.random.randint(1000, 9999)}.jpg"
-        filepath = os.path.join(class_dir, filename)
+        filepath = f"training_data/{damage_class}/{filename}"
         
-        # Save image
-        image.save(filepath)
+        # Convert image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        img_byte_arr.seek(0)
+        img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode()
         
-        # Create/update metadata CSV
-        metadata_file = os.path.join(base_dir, "dataset_metadata.csv")
+        # Upload image to GitHub
+        try:
+            repo.create_file(
+                path=filepath,
+                message=f"Add {damage_class} image: {filename}",
+                content=img_byte_arr.getvalue(),
+                branch="main"
+            )
+        except Exception as e:
+            if "already exists" in str(e):
+                pass  # File already exists
+            else:
+                raise e
+        
+        # Update metadata CSV
+        metadata_file = "training_data/dataset_metadata.csv"
         
         new_record = {
             "timestamp": datetime.now().isoformat(),
@@ -107,34 +129,40 @@ def save_image_locally(image, damage_class, earthquake_data):
             "image_path": filepath
         }
         
-        # Load existing CSV or create new
-        if os.path.exists(metadata_file):
-            df = pd.read_csv(metadata_file)
-            df = pd.concat([df, pd.DataFrame([new_record])], ignore_index=True)
-        else:
-            df = pd.DataFrame([new_record])
+        # Get existing CSV from GitHub
+        try:
+            file_contents = repo.get_contents(metadata_file)
+            csv_content = file_contents.decoded_content.decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_content))
+        except:
+            df = pd.DataFrame(columns=["timestamp", "damage_class", "earthquake_magnitude", "earthquake_location", "filename", "image_path"])
         
-        # Save updated CSV
-        df.to_csv(metadata_file, index=False)
+        # Add new record
+        df = pd.concat([df, pd.DataFrame([new_record])], ignore_index=True)
         
-        return True, f"✅ Image saved to training_data/{damage_class}/"
+        # Upload updated CSV to GitHub
+        csv_string = df.to_csv(index=False)
+        try:
+            file_contents = repo.get_contents(metadata_file)
+            repo.update_file(
+                path=metadata_file,
+                message=f"Update dataset metadata - {damage_class}: {filename}",
+                content=csv_string,
+                sha=file_contents.sha,
+                branch="main"
+            )
+        except:
+            repo.create_file(
+                path=metadata_file,
+                message="Create dataset metadata",
+                content=csv_string,
+                branch="main"
+            )
+        
+        return True, f"✅ Image committed to GitHub: {filepath}"
     
     except Exception as e:
-        return False, f"Error saving: {str(e)}"
-
-def get_dataset_info():
-    """Get information about locally stored dataset"""
-    try:
-        metadata_file = "training_data/dataset_metadata.csv"
-        
-        if os.path.exists(metadata_file):
-            df = pd.read_csv(metadata_file)
-            return df
-        else:
-            return None
-    
-    except Exception as e:
-        return None
+        return False, f"Error: {str(e)}"
 
 # ==================== OTHER FUNCTIONS ====================
 
@@ -345,16 +373,17 @@ if st.session_state.assessment_results:
         st.warning(f"⚠️ Correcting prediction from {damage_class} → {corrected_class}")
     
     if st.button("Save Image to Dataset", type="primary", use_container_width=True):
-        success, message = save_image_locally(
-            image_to_process,
-            corrected_class,  # Save corrected label, not model prediction
-            st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
-        )
-        if success:
-            st.success(message)
-            st.info("📝 This image will improve your model. Commit to GitHub when ready.")
-        else:
-            st.error(message)
+        with st.spinner("Saving to GitHub..."):
+            success, message = save_image_to_github(
+                image_to_process,
+                corrected_class,
+                st.session_state.current_earthquake or {"magnitude": "N/A", "location": "Manual Test"}
+            )
+            if success:
+                st.success(message)
+                st.info("✅ Image automatically committed to GitHub training_data folder!")
+            else:
+                st.error(message)
     
     # Emergency contacts
     if damage_class == "UNSAFE":
