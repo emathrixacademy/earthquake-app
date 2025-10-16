@@ -286,44 +286,188 @@ if st.session_state.assessment_results:
         st.session_state.assessment_results = None
         st.rerun()
 
-# ==================== OPTIONAL: MONITORING DATA ====================
+# ==================== DATA ANALYSIS & MONITORING ====================
 st.divider()
+st.header("Earthquake Data Analysis & Monitoring")
 
-with st.expander("Show Earthquake Monitoring Data"):
-    st.subheader("Real-Time Earthquake Map (Last Hour)")
+# Tabs for analysis
+analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs(["Maps", "Analysis", "Data Tables"])
+
+with analysis_tab1:
+    st.subheader("Earthquake Maps")
     
-    if len(ph_realtime) > 0:
-        fig_realtime = px.scatter_mapbox(
-            ph_realtime,
-            lat="latitude",
-            lon="longitude",
-            size="magnitude",
-            color="magnitude",
-            hover_name="place",
-            hover_data={"magnitude": ":.2f", "depth_km": ":.1f"},
-            zoom=5,
-            height=400
-        )
-        fig_realtime.update_layout(
-            mapbox_style="open-street-map",
-            mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
-        )
-        st.plotly_chart(fig_realtime, use_container_width=True)
-    else:
-        st.info("No earthquakes in the last hour")
-    
-    st.subheader("Earthquake Statistics")
     col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Earthquakes (1 month)", len(ph_historical))
-        if len(ph_historical) > 0:
-            st.metric("Max Magnitude", f"{ph_historical['magnitude'].max():.1f}")
+        st.write("**Real-Time (Last Hour)**")
+        if len(ph_realtime) > 0:
+            fig_realtime = px.scatter_mapbox(
+                ph_realtime,
+                lat="latitude",
+                lon="longitude",
+                size="magnitude",
+                color="magnitude",
+                hover_name="place",
+                hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
+                zoom=5,
+                height=500
+            )
+            fig_realtime.update_layout(
+                mapbox_style="open-street-map",
+                mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
+            )
+            st.plotly_chart(fig_realtime, use_container_width=True)
+        else:
+            st.info("No earthquakes in last hour")
     
     with col2:
+        st.write("**Historical (Last Month)**")
         if len(ph_historical) > 0:
-            avg_depth = ph_historical['depth_km'].mean()
-            st.metric("Average Depth", f"{avg_depth:.1f} km")
+            fig_historical = px.scatter_mapbox(
+                ph_historical,
+                lat="latitude",
+                lon="longitude",
+                size="magnitude",
+                color="magnitude",
+                hover_name="place",
+                hover_data={"magnitude": ":.2f", "depth_km": ":.1f", "time_ph": True},
+                zoom=5,
+                height=500
+            )
+            fig_historical.update_layout(
+                mapbox_style="open-street-map",
+                mapbox=dict(center=dict(lat=12.5, lon=125), zoom=5)
+            )
+            st.plotly_chart(fig_historical, use_container_width=True)
+        else:
+            st.info("No data available")
+
+with analysis_tab2:
+    st.subheader("Statistical Analysis")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total (1 month)", len(ph_historical))
+    with col2:
+        max_mag = ph_historical['magnitude'].max() if len(ph_historical) > 0 else 0
+        st.metric("Max Magnitude", f"{max_mag:.1f}")
+    with col3:
+        avg_mag = ph_historical['magnitude'].mean() if len(ph_historical) > 0 else 0
+        st.metric("Avg Magnitude", f"{avg_mag:.2f}")
+    with col4:
+        avg_depth = ph_historical['depth_km'].mean() if len(ph_historical) > 0 else 0
+        st.metric("Avg Depth (km)", f"{avg_depth:.1f}")
+    
+    st.divider()
+    
+    # Graphs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Magnitude Distribution (Last Month)**")
+        if len(ph_historical) > 0:
+            fig_mag = px.histogram(
+                ph_historical,
+                x="magnitude",
+                nbins=15,
+                labels={"magnitude": "Magnitude"},
+                title="Earthquake Magnitude Distribution"
+            )
+            st.plotly_chart(fig_mag, use_container_width=True)
+        else:
+            st.info("No data")
+    
+    with col2:
+        st.write("**Depth Distribution (Last Month)**")
+        if len(ph_historical) > 0:
+            fig_depth = px.histogram(
+                ph_historical,
+                x="depth_km",
+                nbins=20,
+                labels={"depth_km": "Depth (km)"},
+                title="Earthquake Depth Distribution"
+            )
+            st.plotly_chart(fig_depth, use_container_width=True)
+        else:
+            st.info("No data")
+    
+    # Additional analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Magnitude vs Depth Scatter**")
+        if len(ph_historical) > 0:
+            fig_scatter = px.scatter(
+                ph_historical,
+                x="depth_km",
+                y="magnitude",
+                hover_data=["place", "time_ph"],
+                labels={"depth_km": "Depth (km)", "magnitude": "Magnitude"},
+                title="Relationship: Depth vs Magnitude"
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        else:
+            st.info("No data")
+    
+    with col2:
+        st.write("**Time Series (Last Month)**")
+        if len(ph_historical) > 0:
+            ph_historical_sorted = ph_historical.sort_values('time_ph')
+            fig_time = px.scatter(
+                ph_historical_sorted,
+                x="time_ph",
+                y="magnitude",
+                hover_data=["place"],
+                labels={"time_ph": "Time", "magnitude": "Magnitude"},
+                title="Magnitude Over Time"
+            )
+            st.plotly_chart(fig_time, use_container_width=True)
+        else:
+            st.info("No data")
+
+with analysis_tab3:
+    st.subheader("Detailed Earthquake Data")
+    
+    subtab1, subtab2 = st.tabs(["Last Hour", "Last Month"])
+    
+    with subtab1:
+        st.write("**Real-Time Earthquakes (Last Hour)**")
+        if len(ph_realtime) > 0:
+            display_realtime = ph_realtime[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
+            display_realtime = display_realtime.sort_values('time_ph', ascending=False)
+            display_realtime.columns = ['Location', 'Magnitude', 'Depth (km)', 'Time (PH)']
+            st.dataframe(display_realtime, use_container_width=True, hide_index=True)
+            
+            # Download button
+            csv = display_realtime.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name="ph_earthquakes_1hour.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No earthquakes in last hour")
+    
+    with subtab2:
+        st.write("**Historical Earthquakes (Last Month)**")
+        if len(ph_historical) > 0:
+            display_historical = ph_historical[['place', 'magnitude', 'depth_km', 'time_ph']].copy()
+            display_historical = display_historical.sort_values('time_ph', ascending=False)
+            display_historical.columns = ['Location', 'Magnitude', 'Depth (km)', 'Time (PH)']
+            st.dataframe(display_historical, use_container_width=True, hide_index=True)
+            
+            # Download button
+            csv = display_historical.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name="ph_earthquakes_1month.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No data")
 
 # Test mode
 with st.expander("Test Mode"):
